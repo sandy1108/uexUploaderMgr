@@ -11,6 +11,8 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.text.DecimalFormat;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -29,6 +31,7 @@ import org.zywx.wbpalmstar.engine.universalex.EUExCallback;
 import org.zywx.wbpalmstar.platform.certificates.HNetSSLSocketFactory;
 import org.zywx.wbpalmstar.platform.certificates.HX509HostnameVerifier;
 import org.zywx.wbpalmstar.platform.certificates.Http;
+import org.zywx.wbpalmstar.widgetone.dataservice.WWidgetData;
 
 import android.content.Context;
 import android.content.res.AssetFileDescriptor;
@@ -39,12 +42,17 @@ import android.graphics.BitmapFactory;
 import android.os.Bundle;
 import android.os.Message;
 import android.text.TextUtils;
+import android.util.Log;
 
 public class EUExUploaderMgr extends EUExBase {
 
-    public static final String tag = "uexUploaderMgr_";
-    private static final String F_CALLBACK_NAME_UPLOADSTATUS = "uexUploaderMgr.onStatus";
-    private static final String F_CALLBACK_NAME_CREATEUPLOADER = "uexUploaderMgr.cbCreateUploader";
+	public final static String KEY_APPVERIFY = "appverify";
+	public final static String XMAS_APPID = "x-mas-app-id";
+	private WWidgetData mCurWData;
+
+	public static final String tag = "uexUploaderMgr_";
+	private static final String F_CALLBACK_NAME_UPLOADSTATUS = "uexUploaderMgr.onStatus";
+	private static final String F_CALLBACK_NAME_CREATEUPLOADER = "uexUploaderMgr.cbCreateUploader";
 
     public static final int F_FILE_TYPE_CREATE = 0;
     public static final int F_FILE_TYPE_UPLOAD = 1;
@@ -64,11 +72,12 @@ public class EUExUploaderMgr extends EUExBase {
 	private String mCertPath = "";
 	private boolean mHasCert = false;
 
-    public EUExUploaderMgr(Context context, EBrowserView inParent) {
-        super(context, inParent);
-        objectMap = new HashMap<Integer, EUExFormFile>();
-        mHttpHead = new HashMap<String, String>();
-    }
+	public EUExUploaderMgr(Context context, EBrowserView inParent) {
+		super(context, inParent);
+		objectMap = new HashMap<Integer, EUExFormFile>();
+		mHttpHead = new HashMap<String, String>();
+		mCurWData = getWidgetData(inParent);
+	}
 
     public void createUploader(String[] parm) {
         if(parm == null || parm.length < 2){
@@ -348,6 +357,8 @@ public class EUExUploaderMgr extends EUExBase {
                 if (null != cookie) {
                     conn.setRequestProperty("Cookie", cookie);
                 }
+				
+
                 conn.setReadTimeout(TIME_OUT);
                 conn.setConnectTimeout(TIME_OUT);
                 conn.setDoInput(true); // 允许输入流
@@ -359,7 +370,15 @@ public class EUExUploaderMgr extends EUExBase {
                 conn.setRequestProperty("Content-Type", CONTENT_TYPE
                         + ";boundary=" + BOUNDARY);
                 addHeaders(conn);
-                /**
+				
+				if (null != mCurWData) {
+					conn.setRequestProperty(
+							KEY_APPVERIFY,
+							getAppVerifyValue(mCurWData,
+									System.currentTimeMillis()));
+					conn.setRequestProperty(XMAS_APPID,mCurWData.m_appId);
+				}
+				/**
                  * 当文件不为空，把文件包装并且上传
                  */
                 DataOutputStream dos = new DataOutputStream(
@@ -610,12 +629,16 @@ public class EUExUploaderMgr extends EUExBase {
                 int srcWidth = source.getWidth();
                 int srcHeight = source.getHeight();
                 final float sacleRate = max / (float) srcWidth;
-                final int destWidth = (int) (srcWidth * sacleRate);
-                final int destHeight = (int) (srcHeight * sacleRate);
-                dstbmp = Bitmap.createScaledBitmap(source, destWidth,
-                        destHeight, false);
-                if (source != null && !source.isRecycled()) {
-                    source.recycle();
+                if (sacleRate != 1) {
+                	final int destWidth = (int) (srcWidth * sacleRate);
+                	final int destHeight = (int) (srcHeight * sacleRate);
+                	dstbmp = Bitmap.createScaledBitmap(source, destWidth,
+                			destHeight, false);
+                	if (source != null && !source.isRecycled()) {
+                		source.recycle();
+                	}
+                } else {
+                	dstbmp = source;
                 }
                 if (dstbmp.compress(CompressFormat.JPEG, quality, baos)) {
                     if (dstbmp != null && !dstbmp.isRecycled()) {
@@ -668,4 +691,60 @@ public class EUExUploaderMgr extends EUExBase {
         }
     }
     
+	/**
+	 * 添加验证头
+	 * 
+	 * @param curWData
+	 *            当前widgetData
+	 * @param timeStamp
+	 *            当前时间戳
+	 * @return
+	 */
+	private String getAppVerifyValue(WWidgetData curWData, long timeStamp) {
+		String value = null;
+		String md5 = getMD5Code(curWData.m_appId + ":" + curWData.m_appkey
+				+ ":" + timeStamp);
+		value = "md5=" + md5 + ";ts=" + timeStamp;
+		return value;
+
+	}
+
+	private String getMD5Code(String value) {
+		if (value == null) {
+			value = "";
+		}
+		try {
+			MessageDigest md = MessageDigest.getInstance("MD5");
+			md.reset();
+			md.update(value.getBytes());
+			byte[] md5Bytes = md.digest();
+			StringBuffer hexValue = new StringBuffer();
+			for (int i = 0; i < md5Bytes.length; i++) {
+				int val = ((int) md5Bytes[i]) & 0xff;
+				if (val < 16)
+					hexValue.append("0");
+				hexValue.append(Integer.toHexString(val));
+			}
+			return hexValue.toString();
+		} catch (NoSuchAlgorithmException e) {
+			e.printStackTrace();
+		}
+
+		return null;
+	}
+	/**
+	 * plugin里面的子应用的appId和appkey都按照主应用为准
+	 */
+	private WWidgetData getWidgetData(EBrowserView view){
+		WWidgetData widgetData = view.getCurrentWidget();
+		String indexUrl=widgetData.m_indexUrl;
+		Log.i("uexUploaderMgr", "m_indexUrl:"+indexUrl);
+		if(widgetData.m_wgtType!=0){
+			if(indexUrl.contains("widget/plugin")){
+				return view.getRootWidget();
+			}
+		}
+		return widgetData;
+	}
+
 }
